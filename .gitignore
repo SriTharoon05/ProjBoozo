@@ -1,0 +1,82 @@
+# =========================
+# 🔹 React / Frontend
+# =========================
+node_modules/
+build/
+dist/
+.cache/
+.next/
+out/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
+
+# =========================
+# 🔹 Flask / Python Backend
+# =========================
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Flask instance folder
+instance/
+
+# Environment variables
+.env
+*.env
+
+# Logs
+*.log
+
+# Database files
+*.sqlite3
+*.db
+
+# Bytecode / compiled
+*.pyo
+*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# =========================
+# 🔹 Misc
+# =========================
+*.swp
+*.swo
