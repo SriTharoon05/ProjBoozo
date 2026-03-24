@@ -39,7 +39,7 @@ function App() {
     formData.append('file', selectedFile);
 
     try {
-      const response = await fetch(`http://localhost:5000/${endpoint}`, {
+      const response = await fetch(`https://projboozo.onrender.com/${endpoint}`, {
         method: 'POST',
         body: formData,
       });
