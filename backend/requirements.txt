@@ -7,7 +7,6 @@ groq
 PyPDF2
 python-dotenv
 gunicorn
-easyocr 
 pytesseract 
 pdf2image 
 pillow
