@@ -46,8 +46,17 @@ function App() {
 });
 
       if (!response.ok) {
-        const error = await response.json();
-        alert(`Error: ${error.error}`);
+        let errorMessage = "Unknown error";
+
+try {
+  const err = await response.json();
+  errorMessage = err.error || errorMessage;
+} catch {
+  const text = await response.text();
+  errorMessage = text;
+}
+
+alert("Error: " + errorMessage);
         return;
       }
 
