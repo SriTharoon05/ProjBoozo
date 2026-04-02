@@ -40,9 +40,10 @@ function App() {
 
     try {
       const response = await fetch(`https://projboozo.onrender.com/${endpoint}`, {
-        method: 'POST',
-        body: formData,
-      });
+  method: 'POST',
+  body: formData,
+  mode: "cors",
+});
 
       if (!response.ok) {
         const error = await response.json();

@@ -94,7 +94,7 @@ def extract_text_with_tesseract(pdf_bytes):
     return full_text.strip()
 
 
-@app.route("/download_with_image_model", methods=["POST"])
+@app.route("/download_with_image_model", methods=["POST", "OPTIONS"])
 def process_with_gemini():
     """Endpoint for Gemini (Image Model) PDF processing."""
     if "file" not in request.files:
@@ -139,7 +139,7 @@ def process_with_gemini():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/download_with_text_model", methods=["POST"])
+@app.route("/download_with_text_model", methods=["POST", "OPTIONS"])
 def process_with_groq():
     """Endpoint for Groq (Text Model) PDF processing with OCR fallback."""
     if "file" not in request.files:
