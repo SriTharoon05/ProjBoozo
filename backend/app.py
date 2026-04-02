@@ -7,29 +7,26 @@ from flask_cors import CORS
 import google.generativeai as genai
 from groq import Groq
 from PyPDF2 import PdfReader
-
 from dotenv import load_dotenv
 
-app = Flask(__name__)
-# Enable CORS so your frontend can communicate with these endpoints
-CORS(app) 
+# OCR Imports
+import pytesseract
+import easyocr
+from pdf2image import convert_from_bytes
+from PIL import Image
 
-# Configure API Keys (Move these to environment variables in production)
-# 1. Force Python to find the .env file in the current folder
+app = Flask(__name__)
+CORS(app)
+
 basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '.env'))
 
-# 2. Grab the keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-
-# 3. Quick debug print to prove it works (you can delete this later)
-print(f"DEBUG - Is Groq Key loaded? {'YES' if GROQ_API_KEY else 'NO'}")
 
 genai.configure(api_key=GEMINI_API_KEY)
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# The instruction set for both models to ensure uniform JSON output
 SYSTEM_PROMPT = """
 You are a data extraction assistant. Extract the payroll data from the provided document or text.
 Return ONLY a valid JSON object with a single key called "data". The value of "data" must be an array of objects.
@@ -45,116 +42,114 @@ Example format:
 }
 """
 
+# =============================
+# OCR ENGINE SWITCH HERE
+# =============================
+OCR_ENGINE = "tesseract"   # "tesseract" or "easyocr"
+
+# Load EasyOCR reader once (better performance)
+easyocr_reader = easyocr.Reader(['en'], gpu=False)
+
+
 def generate_excel_buffer(json_data):
-    """Helper function to convert JSON data into a downloadable Excel buffer."""
     try:
-        # Extract the list of records from the JSON response
         records = json_data.get("data", [])
         df = pd.DataFrame(records)
-        
-        # Ensure the columns match your required structure
+
         expected_columns = ["SSN", "Participant", "Amount", "Contract", "Carrier Name"]
         for col in expected_columns:
             if col not in df.columns:
                 df[col] = None
-                
-        # Reorder columns just in case the LLM mixed them up
+
         df = df[expected_columns]
 
-        # Write to an in-memory buffer
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Payroll Data')
-        
+
         output.seek(0)
         return output
     except Exception as e:
         raise ValueError(f"Failed to generate Excel: {str(e)}")
 
 
-@app.route('/download_with_image_model', methods=['POST'])
-def process_with_gemini():
-    """Endpoint for the 'Download with image model' button."""
-    if 'file' not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-        
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
+def extract_text_with_pypdf2(pdf_file):
+    pdf_reader = PdfReader(pdf_file)
+    extracted_text = ""
 
-    try:
-        # Read file bytes and determine mime type
-        file_bytes = file.read()
-        mime_type = file.mimetype
+    for page in pdf_reader.pages:
+        text = page.extract_text()
+        if text:
+            extracted_text += text + "\n"
 
-        # Gemini 1.5 Flash natively supports both images and PDFs natively
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        # Pass the prompt and the raw file data to Gemini
-        contents = [
-            SYSTEM_PROMPT,
-            {"mime_type": mime_type, "data": file_bytes}
-        ]
-        
-        response = model.generate_content(contents)
-        
-        # Clean the response in case the model adds markdown formatting like ```json
-        response_text = response.text.strip().removeprefix('```json').removesuffix('```').strip()
-        parsed_data = json.loads(response_text)
-        
-        excel_buffer = generate_excel_buffer(parsed_data)
-        
-        return send_file(
-            excel_buffer,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name='Extracted_Data_Gemini.xlsx'
-        )
+    return extracted_text.strip()
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+
+def extract_text_with_ocr(pdf_bytes):
+    images = convert_from_bytes(pdf_bytes)
+    full_text = ""
+
+    for img in images:
+        if OCR_ENGINE == "tesseract":
+            text = pytesseract.image_to_string(img)
+        elif OCR_ENGINE == "easyocr":
+            result = easyocr_reader.readtext(
+                img,
+                detail=0,
+                paragraph=True
+            )
+            text = "\n".join(result)
+        else:
+            raise ValueError("Invalid OCR_ENGINE. Use 'tesseract' or 'easyocr'.")
+
+        full_text += text + "\n"
+
+    return full_text.strip()
 
 
 @app.route('/download_with_text_model', methods=['POST'])
 def process_with_groq():
-    """Endpoint for the 'Download with text model' button."""
     if 'file' not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
-        
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
     try:
-        # Extract text using PyPDF2
-        pdf_reader = PdfReader(file)
-        extracted_text = ""
-        for page in pdf_reader.pages:
-            extracted_text += page.extract_text() + "\n"
+        # Read PDF bytes for OCR fallback
+        pdf_bytes = file.read()
+
+        # Reset file pointer so PyPDF2 can read it
+        file.seek(0)
+
+        # Step 1: Try PyPDF2 extraction
+        extracted_text = extract_text_with_pypdf2(file)
+
+        # Step 2: If PyPDF2 fails, use OCR
+        if not extracted_text.strip():
+            print("⚠️ No text found using PyPDF2. Running OCR...")
+            extracted_text = extract_text_with_ocr(pdf_bytes)
 
         if not extracted_text.strip():
-            return jsonify({"error": "Could not extract text from the PDF. It might be a scanned image."}), 400
+            return jsonify({"error": "Could not extract text from the PDF even with OCR."}), 400
 
-        # Pass the extracted text to Groq
+        # Step 3: Send extracted text to Groq
         chat_completion = groq_client.chat.completions.create(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT.replace('\xa0', ' ')}, # Scrub hidden chars from prompt
+                {"role": "system", "content": SYSTEM_PROMPT.replace('\xa0', ' ')},
                 {"role": "user", "content": f"Here is the document text to process:\n\n{extracted_text}"}
             ],
             model="llama-3.1-8b-instant",
-            response_format={"type": "json_object"} 
+            response_format={"type": "json_object"}
         )
-        
-        # 1. Grab the content (The MUST be here)
+
         response_text = chat_completion.choices[0].message.content
-        
-        # 2. Scrub any hidden non-breaking spaces before JSON parsing
         clean_text = response_text.replace('\xa0', ' ').strip()
-        
-        # 3. Parse and build the Excel file
+
         parsed_data = json.loads(clean_text)
         excel_buffer = generate_excel_buffer(parsed_data)
-        
+
         return send_file(
             excel_buffer,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -163,10 +158,9 @@ def process_with_groq():
         )
 
     except Exception as e:
-        # This will print the EXACT error to your terminal so we aren't guessing!
         print(f"\n--- CRITICAL BACKEND ERROR --- \n{str(e)}\n------------------------------\n")
         return jsonify({"error": str(e)}), 500
 
+
 if __name__ == '__main__':
-    # Run the Flask app on port 5000
     app.run(debug=True, port=5000)
