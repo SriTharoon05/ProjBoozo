@@ -39,7 +39,7 @@ function App() {
     formData.append('file', selectedFile);
 
     try {
-      const response = await fetch(`https://projboozo.onrender.com/${endpoint}`, {
+      const response = await fetch(`https://sritharoonhf-boozo.hf.space/${endpoint}`, {
   method: 'POST',
   body: formData,
   mode: "cors",
