@@ -14,7 +14,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Load .env locally (Render will use Environment Variables directly)
 basedir = os.path.abspath(os.path.dirname(__file__))
