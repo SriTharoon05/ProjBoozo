@@ -9,20 +9,22 @@ from groq import Groq
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 
-# OCR Imports
+# OCR Imports (Tesseract Only)
 import pytesseract
-import easyocr
 from pdf2image import convert_from_bytes
-from PIL import Image
 
 app = Flask(__name__)
 CORS(app)
 
+# Load .env locally (Render will use Environment Variables directly)
 basedir = os.path.abspath(os.path.dirname(__file__))
-load_dotenv(os.path.join(basedir, '.env'))
+load_dotenv(os.path.join(basedir, ".env"))
 
+# API Keys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+print(f"DEBUG - Is Groq Key loaded? {'YES' if GROQ_API_KEY else 'NO'}")
 
 genai.configure(api_key=GEMINI_API_KEY)
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -42,16 +44,9 @@ Example format:
 }
 """
 
-# =============================
-# OCR ENGINE SWITCH HERE
-# =============================
-OCR_ENGINE = "tesseract"   # "tesseract" or "easyocr"
-
-# Load EasyOCR reader once (better performance)
-easyocr_reader = easyocr.Reader(['en'], gpu=False)
-
 
 def generate_excel_buffer(json_data):
+    """Convert JSON extracted data into an Excel file buffer."""
     try:
         records = json_data.get("data", [])
         df = pd.DataFrame(records)
@@ -64,16 +59,18 @@ def generate_excel_buffer(json_data):
         df = df[expected_columns]
 
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Payroll Data')
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Payroll Data")
 
         output.seek(0)
         return output
+
     except Exception as e:
         raise ValueError(f"Failed to generate Excel: {str(e)}")
 
 
 def extract_text_with_pypdf2(pdf_file):
+    """Extract text from PDF using PyPDF2."""
     pdf_reader = PdfReader(pdf_file)
     extracted_text = ""
 
@@ -85,76 +82,113 @@ def extract_text_with_pypdf2(pdf_file):
     return extracted_text.strip()
 
 
-def extract_text_with_ocr(pdf_bytes):
+def extract_text_with_tesseract(pdf_bytes):
+    """Extract text from scanned PDF using Tesseract OCR."""
     images = convert_from_bytes(pdf_bytes)
     full_text = ""
 
     for img in images:
-        if OCR_ENGINE == "tesseract":
-            text = pytesseract.image_to_string(img)
-        elif OCR_ENGINE == "easyocr":
-            result = easyocr_reader.readtext(
-                img,
-                detail=0,
-                paragraph=True
-            )
-            text = "\n".join(result)
-        else:
-            raise ValueError("Invalid OCR_ENGINE. Use 'tesseract' or 'easyocr'.")
-
+        text = pytesseract.image_to_string(img)
         full_text += text + "\n"
 
     return full_text.strip()
 
 
-@app.route('/download_with_text_model', methods=['POST'])
-def process_with_groq():
-    if 'file' not in request.files:
+@app.route("/download_with_image_model", methods=["POST"])
+def process_with_gemini():
+    """Endpoint for Gemini (Image Model) PDF processing."""
+    if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
-    file = request.files['file']
-    if file.filename == '':
+    file = request.files["file"]
+    if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
     try:
-        # Read PDF bytes for OCR fallback
-        pdf_bytes = file.read()
+        file_bytes = file.read()
+        mime_type = file.mimetype
 
-        # Reset file pointer so PyPDF2 can read it
-        file.seek(0)
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
-        # Step 1: Try PyPDF2 extraction
-        extracted_text = extract_text_with_pypdf2(file)
+        contents = [
+            SYSTEM_PROMPT,
+            {"mime_type": mime_type, "data": file_bytes},
+        ]
 
-        # Step 2: If PyPDF2 fails, use OCR
-        if not extracted_text.strip():
-            print("⚠️ No text found using PyPDF2. Running OCR...")
-            extracted_text = extract_text_with_ocr(pdf_bytes)
+        response = model.generate_content(contents)
 
-        if not extracted_text.strip():
-            return jsonify({"error": "Could not extract text from the PDF even with OCR."}), 400
-
-        # Step 3: Send extracted text to Groq
-        chat_completion = groq_client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT.replace('\xa0', ' ')},
-                {"role": "user", "content": f"Here is the document text to process:\n\n{extracted_text}"}
-            ],
-            model="llama-3.1-8b-instant",
-            response_format={"type": "json_object"}
+        response_text = (
+            response.text.strip()
+            .removeprefix("```json")
+            .removesuffix("```")
+            .strip()
         )
 
-        response_text = chat_completion.choices[0].message.content
-        clean_text = response_text.replace('\xa0', ' ').strip()
+        parsed_data = json.loads(response_text)
 
-        parsed_data = json.loads(clean_text)
         excel_buffer = generate_excel_buffer(parsed_data)
 
         return send_file(
             excel_buffer,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name='Extracted_Data_Groq.xlsx'
+            download_name="Extracted_Data_Gemini.xlsx",
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/download_with_text_model", methods=["POST"])
+def process_with_groq():
+    """Endpoint for Groq (Text Model) PDF processing with OCR fallback."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file"}), 400
+
+    try:
+        # Read bytes for OCR fallback
+        pdf_bytes = file.read()
+
+        # Reset pointer for PyPDF2 reading
+        file.seek(0)
+
+        # Step 1: Try normal text extraction
+        extracted_text = extract_text_with_pypdf2(file)
+
+        # Step 2: If no text, use OCR
+        if not extracted_text.strip():
+            print("⚠️ No text found using PyPDF2. Running Tesseract OCR...")
+            extracted_text = extract_text_with_tesseract(pdf_bytes)
+
+        if not extracted_text.strip():
+            return jsonify({"error": "Could not extract text from PDF even with OCR."}), 400
+
+        # Step 3: Send extracted text to Groq
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT.replace("\xa0", " ")},
+                {"role": "user", "content": f"Here is the document text:\n\n{extracted_text}"},
+            ],
+            model="llama-3.1-8b-instant",
+            response_format={"type": "json_object"},
+        )
+
+        response_text = chat_completion.choices[0].message.content
+        clean_text = response_text.replace("\xa0", " ").strip()
+
+        parsed_data = json.loads(clean_text)
+
+        excel_buffer = generate_excel_buffer(parsed_data)
+
+        return send_file(
+            excel_buffer,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="Extracted_Data_Groq.xlsx",
         )
 
     except Exception as e:
@@ -162,5 +196,5 @@ def process_with_groq():
         return jsonify({"error": str(e)}), 500
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True, port=5000)
