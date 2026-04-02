@@ -84,7 +84,7 @@ def extract_text_with_pypdf2(pdf_file):
 
 def extract_text_with_tesseract(pdf_bytes):
     """Extract text from scanned PDF using Tesseract OCR."""
-    images = convert_from_bytes(pdf_bytes)
+    images = convert_from_bytes(pdf_bytes, dpi=150)
     full_text = ""
 
     for img in images:
